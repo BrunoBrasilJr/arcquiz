@@ -19,22 +19,34 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", "arcquiz-dev-secret")
 def resolve_db_url() -> str:
     """
     Produção (Vercel): usa Postgres se DATABASE_URL estiver setada.
-    Local (Windows): cai no SQLite na raiz do projeto.
-    """
-    db_url = os.environ.get("DATABASE_URL")
-    if db_url:
-        # Neon/Vercel normalmente já vem compatível
-        return db_url
+    Local: cai no SQLite na raiz do projeto.
 
-    # Local: SQLite
-    sqlite_path = os.path.join(BASE_DIR, "quiz.db")
-    return f"sqlite:///{sqlite_path}"
+    IMPORTANTÍSSIMO: força o SQLAlchemy a usar psycopg v3,
+    evitando o dialeto psycopg2 (que está causando o crash na Vercel).
+    """
+    db_url = (os.environ.get("DATABASE_URL") or "").strip()
+
+    if not db_url:
+        sqlite_path = os.path.join(BASE_DIR, "quiz.db")
+        return f"sqlite:///{sqlite_path}"
+
+    # alguns providers usam postgres:// (deprecated)
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+    # força o driver psycopg (v3). Evita cair no psycopg2.
+    if db_url.startswith("postgresql://") and not db_url.startswith("postgresql+psycopg://"):
+        db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
+    return db_url
 
 
 DB_URL = resolve_db_url()
 
 # pool_pre_ping ajuda em conexões que dormem (serverless)
 engine = create_engine(DB_URL, pool_pre_ping=True)
+
+_DB_READY = False  # evita rodar DDL a cada request
 
 
 def init_db() -> None:
@@ -53,7 +65,7 @@ def init_db() -> None:
     )
     """
 
-    # Ajuste para Postgres (não tem AUTOINCREMENT desse jeito)
+    # Ajuste para Postgres (não tem AUTOINCREMENT)
     if DB_URL.startswith("postgres"):
         ddl = """
         CREATE TABLE IF NOT EXISTS highscores (
@@ -72,7 +84,10 @@ def init_db() -> None:
 
 @app.before_request
 def _ensure_db_ready() -> None:
-    init_db()
+    global _DB_READY
+    if not _DB_READY:
+        init_db()
+        _DB_READY = True
 
 
 def load_questions() -> List[Dict[str, Any]]:
