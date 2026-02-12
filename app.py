@@ -9,8 +9,25 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
-DB_PATH = os.path.join(BASE_DIR, "quiz.db")
 QUESTIONS_PATH = os.path.join(DATA_DIR, "questions.json")
+
+# ✅ Vercel/serverless (Linux): /var/task é read-only; use /tmp para gravar
+# Local (Windows/macOS): mantém o DB na raiz do projeto
+def resolve_db_path() -> str:
+    # Se você quiser forçar via env var no futuro:
+    env_path = os.environ.get("DB_PATH")
+    if env_path:
+        return env_path
+
+    # Vercel roda em Linux; /tmp é gravável
+    if os.name != "nt":
+        return os.path.join("/tmp", "quiz.db")
+
+    # Local (Windows)
+    return os.path.join(BASE_DIR, "quiz.db")
+
+
+DB_PATH = resolve_db_path()
 
 APP_NAME = "ArcQuiz"  # nome do produto (pode trocar)
 app = Flask(__name__)
@@ -18,6 +35,11 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", "arcquiz-dev-secret")
 
 
 def get_db() -> sqlite3.Connection:
+    # Garante que o diretório exista (por segurança)
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
@@ -40,7 +62,10 @@ def init_db() -> None:
         conn.commit()
 
 
-init_db()
+# ✅ Não inicializa no import (Vercel quebra aqui). Inicializa no request.
+@app.before_request
+def _ensure_db_ready() -> None:
+    init_db()
 
 
 def load_questions() -> List[Dict[str, Any]]:
