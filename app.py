@@ -1,68 +1,75 @@
 import json
 import os
 import random
-import sqlite3
 from datetime import datetime
 from typing import Any, Dict, List
 
 from flask import Flask, render_template, request, redirect, url_for, session, flash
+from sqlalchemy import create_engine, text
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 QUESTIONS_PATH = os.path.join(DATA_DIR, "questions.json")
 
-# ✅ Vercel/serverless (Linux): /var/task é read-only; use /tmp para gravar
-# Local (Windows/macOS): mantém o DB na raiz do projeto
-def resolve_db_path() -> str:
-    # Se você quiser forçar via env var no futuro:
-    env_path = os.environ.get("DB_PATH")
-    if env_path:
-        return env_path
-
-    # Vercel roda em Linux; /tmp é gravável
-    if os.name != "nt":
-        return os.path.join("/tmp", "quiz.db")
-
-    # Local (Windows)
-    return os.path.join(BASE_DIR, "quiz.db")
-
-
-DB_PATH = resolve_db_path()
-
-APP_NAME = "ArcQuiz"  # nome do produto (pode trocar)
+APP_NAME = "ArcQuiz"
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "arcquiz-dev-secret")
 
 
-def get_db() -> sqlite3.Connection:
-    # Garante que o diretório exista (por segurança)
-    db_dir = os.path.dirname(DB_PATH)
-    if db_dir:
-        os.makedirs(db_dir, exist_ok=True)
+def resolve_db_url() -> str:
+    """
+    Produção (Vercel): usa Postgres se DATABASE_URL estiver setada.
+    Local (Windows): cai no SQLite na raiz do projeto.
+    """
+    db_url = os.environ.get("DATABASE_URL")
+    if db_url:
+        # Neon/Vercel normalmente já vem compatível
+        return db_url
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    # Local: SQLite
+    sqlite_path = os.path.join(BASE_DIR, "quiz.db")
+    return f"sqlite:///{sqlite_path}"
+
+
+DB_URL = resolve_db_url()
+
+# pool_pre_ping ajuda em conexões que dormem (serverless)
+engine = create_engine(DB_URL, pool_pre_ping=True)
 
 
 def init_db() -> None:
-    with get_db() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS highscores (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                score INTEGER NOT NULL,
-                total INTEGER NOT NULL,
-                percent REAL NOT NULL,
-                created_at TEXT NOT NULL
-            )
-            """
+    """
+    Cria tabela se não existir.
+    Compatível com SQLite e Postgres.
+    """
+    ddl = """
+    CREATE TABLE IF NOT EXISTS highscores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        score INTEGER NOT NULL,
+        total INTEGER NOT NULL,
+        percent REAL NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """
+
+    # Ajuste para Postgres (não tem AUTOINCREMENT desse jeito)
+    if DB_URL.startswith("postgres"):
+        ddl = """
+        CREATE TABLE IF NOT EXISTS highscores (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            score INTEGER NOT NULL,
+            total INTEGER NOT NULL,
+            percent DOUBLE PRECISION NOT NULL,
+            created_at TEXT NOT NULL
         )
-        conn.commit()
+        """
+
+    with engine.begin() as conn:
+        conn.execute(text(ddl))
 
 
-# ✅ Não inicializa no import (Vercel quebra aqui). Inicializa no request.
 @app.before_request
 def _ensure_db_ready() -> None:
     init_db()
@@ -184,7 +191,6 @@ def start():
 
     requested = clamp_int(requested_raw, default=default_amount, min_v=1, max_v=available)
 
-    # Se o usuário tentou pedir mais do que existe (ou mexeu no input), ajusta e avisa
     try:
         raw_int = int(requested_raw)
         if raw_int > available:
@@ -286,15 +292,22 @@ def result():
     rank = grade_rank(score, total)
 
     if not session.get("score_saved", False):
-        with get_db() as conn:
+        with engine.begin() as conn:
             conn.execute(
-                """
-                INSERT INTO highscores (name, score, total, percent, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (name, score, total, float(percent), datetime.utcnow().isoformat()),
+                text(
+                    """
+                    INSERT INTO highscores (name, score, total, percent, created_at)
+                    VALUES (:name, :score, :total, :percent, :created_at)
+                    """
+                ),
+                {
+                    "name": name,
+                    "score": score,
+                    "total": total,
+                    "percent": float(percent),
+                    "created_at": datetime.utcnow().isoformat(),
+                },
             )
-            conn.commit()
         session["score_saved"] = True
 
     answers = quiz_state.get("answers", [])
@@ -312,15 +325,17 @@ def result():
 
 @app.get("/highscores")
 def highscores():
-    with get_db() as conn:
+    with engine.begin() as conn:
         rows = conn.execute(
-            """
-            SELECT name, score, total, percent, created_at
-            FROM highscores
-            ORDER BY percent DESC, score DESC, created_at DESC
-            LIMIT 20
-            """
-        ).fetchall()
+            text(
+                """
+                SELECT name, score, total, percent, created_at
+                FROM highscores
+                ORDER BY percent DESC, score DESC, created_at DESC
+                LIMIT 20
+                """
+            )
+        ).mappings().all()
 
     items = [
         {
@@ -337,7 +352,6 @@ def highscores():
 
 @app.post("/reset")
 def reset():
-    # Reset = novo quiz imediatamente (shuffle novo), mantendo nome e quantidade escolhida
     available = question_count()
     if available <= 0:
         session.pop("quiz", None)
