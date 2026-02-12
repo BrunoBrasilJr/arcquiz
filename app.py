@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -21,8 +22,7 @@ def resolve_db_url() -> str:
     Produção (Vercel): usa Postgres se DATABASE_URL estiver setada.
     Local: cai no SQLite na raiz do projeto.
 
-    IMPORTANTÍSSIMO: força o SQLAlchemy a usar psycopg v3,
-    evitando o dialeto psycopg2 (que está causando o crash na Vercel).
+    Força o SQLAlchemy a usar psycopg v3 (evita psycopg2).
     """
     db_url = (os.environ.get("DATABASE_URL") or "").strip()
 
@@ -30,11 +30,9 @@ def resolve_db_url() -> str:
         sqlite_path = os.path.join(BASE_DIR, "quiz.db")
         return f"sqlite:///{sqlite_path}"
 
-    # alguns providers usam postgres:// (deprecated)
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
 
-    # força o driver psycopg (v3). Evita cair no psycopg2.
     if db_url.startswith("postgresql://") and not db_url.startswith("postgresql+psycopg://"):
         db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
@@ -42,19 +40,52 @@ def resolve_db_url() -> str:
 
 
 DB_URL = resolve_db_url()
-
-# pool_pre_ping ajuda em conexões que dormem (serverless)
 engine = create_engine(DB_URL, pool_pre_ping=True)
 
-_DB_READY = False  # evita rodar DDL a cada request
+_DB_READY = False
+
+
+def is_postgres(url: str) -> bool:
+    return url.startswith("postgres") or url.startswith("postgresql")
 
 
 def init_db() -> None:
     """
     Cria tabela se não existir.
-    Compatível com SQLite e Postgres.
+
+    Importante: em Postgres (serverless), evita SERIAL para não estourar corrida
+    de criação de tipo/sequence. Usa SEQUENCE + DEFAULT nextval, que é bem mais estável.
     """
-    ddl = """
+    if is_postgres(DB_URL):
+        # Postgres: cria sequence (se não existir) e cria tabela usando DEFAULT nextval
+        ddl_sequence = "CREATE SEQUENCE IF NOT EXISTS highscores_id_seq;"
+        ddl_table = """
+        CREATE TABLE IF NOT EXISTS highscores (
+            id INTEGER PRIMARY KEY DEFAULT nextval('highscores_id_seq'),
+            name TEXT NOT NULL,
+            score INTEGER NOT NULL,
+            total INTEGER NOT NULL,
+            percent DOUBLE PRECISION NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        """
+        # garante que a sequence esteja "owned" pela coluna id (boa prática)
+        ddl_owned = "ALTER SEQUENCE highscores_id_seq OWNED BY highscores.id;"
+
+        with engine.begin() as conn:
+            conn.execute(text(ddl_sequence))
+            conn.execute(text(ddl_table))
+            # esse ALTER pode falhar se a tabela ainda não existir em algum timing raro,
+            # então tratamos sem quebrar o app
+            try:
+                conn.execute(text(ddl_owned))
+            except Exception:
+                pass
+
+        return
+
+    # SQLite
+    ddl_sqlite = """
     CREATE TABLE IF NOT EXISTS highscores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -62,31 +93,29 @@ def init_db() -> None:
         total INTEGER NOT NULL,
         percent REAL NOT NULL,
         created_at TEXT NOT NULL
-    )
+    );
     """
-
-    # Ajuste para Postgres (não tem AUTOINCREMENT)
-    if DB_URL.startswith("postgres"):
-        ddl = """
-        CREATE TABLE IF NOT EXISTS highscores (
-            id SERIAL PRIMARY KEY,
-            name TEXT NOT NULL,
-            score INTEGER NOT NULL,
-            total INTEGER NOT NULL,
-            percent DOUBLE PRECISION NOT NULL,
-            created_at TEXT NOT NULL
-        )
-        """
-
     with engine.begin() as conn:
-        conn.execute(text(ddl))
+        conn.execute(text(ddl_sqlite))
 
 
 @app.before_request
 def _ensure_db_ready() -> None:
+    """
+    Roda init_db só uma vez por instância.
+    Em caso de corrida rara no Postgres, engole erro de "já existe".
+    """
     global _DB_READY
-    if not _DB_READY:
+    if _DB_READY:
+        return
+
+    try:
         init_db()
+        _DB_READY = True
+    except (IntegrityError, ProgrammingError) as e:
+        # Se duas instâncias tentarem criar ao mesmo tempo, pode dar erro mesmo com IF NOT EXISTS.
+        # Como a intenção é só garantir que exista, a gente tenta marcar como pronto e seguir.
+        # Se realmente não existir, o app vai falhar em inserts depois (e aí a gente vê).
         _DB_READY = True
 
 
