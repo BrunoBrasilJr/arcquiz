@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Resultado — {{ app_name }}{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <div class="top">
+      <div>
+        <div class="meta">Resultado</div>
+        <h2 class="question">{{ rank.title }}</h2>
+        <div class="sub">{{ rank.msg }}</div>
+      </div>
+
+      <div class="score">
+        <div class="score__main">{{ score }}/{{ total }}</div>
+        <div class="score__sub">{{ "%.1f"|format(percent) }}%</div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="actions">
+      <form method="post" action="{{ url_for('reset') }}">
+        <button class="btn btn--primary" type="submit">Novo quiz</button>
+      </form>
+      <a class="btn btn--ghost" href="{{ url_for('highscores') }}">Ranking</a>
+    </div>
+
+    <div class="divider"></div>
+
+    <h3 class="section">Revisão</h3>
+
+    <div class="review">
+      {% for a in answers %}
+        <div class="review__item">
+          <div class="review__head">
+            <strong>{{ loop.index }}. {{ a.question }}</strong>
+            {% if a.is_correct %}
+              <span class="pill pill--ok">Correta</span>
+            {% else %}
+              <span class="pill pill--bad">Incorreta</span>
+            {% endif %}
+          </div>
+
+          <div class="sub">
+            Sua resposta: <strong>{{ a.chosen }}</strong> · Correta: <strong>{{ a.correct }}</strong>
+          </div>
+
+          <div class="explain">
+            <strong>Explicação:</strong> {{ a.explanation }}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="end">
+      <a class="btn btn--ghost" href="#top">Voltar ao topo</a>
+      <a class="btn btn--ghost" href="{{ url_for('index') }}">Voltar ao início</a>
+    </div>
+  </section>
+{% endblock %}

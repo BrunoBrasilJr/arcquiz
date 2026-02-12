@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ app_name }}{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <h1 class="title">{{ app_name }}</h1>
+    <p class="lead">
+      Selecione a quantidade de perguntas e inicie o quiz. Ao final, seu resultado é registrado no ranking.
+    </p>
+
+    <form class="form" method="post" action="{{ url_for('start') }}">
+      <label class="label">
+        Nome
+        <input class="input" name="name" placeholder="Player" maxlength="32" />
+      </label>
+
+      <label class="label">
+        Quantidade de perguntas (máximo: {{ available }})
+        <input
+          class="input"
+          type="number"
+          name="amount"
+          min="1"
+          max="{{ available }}"
+          value="{{ 10 if available >= 10 else available }}"
+        />
+      </label>
+
+      <button class="btn btn--primary" type="submit">Iniciar</button>
+    </form>
+  </section>
+{% endblock %}

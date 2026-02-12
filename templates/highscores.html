@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Ranking — {{ app_name }}{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <div class="top">
+      <div>
+        <div class="meta">Top 20</div>
+        <h2 class="question">Ranking</h2>
+        <div class="sub">Melhores resultados registrados.</div>
+      </div>
+      <a class="btn btn--primary" href="{{ url_for('index') }}">Voltar</a>
+    </div>
+
+    <div class="divider"></div>
+
+    {% if items|length == 0 %}
+      <div class="sub">Ainda não há resultados registrados.</div>
+    {% else %}
+      <div class="table">
+        <div class="table__head">
+          <div>#</div><div>Nome</div><div>Pontos</div><div>%</div><div>Data</div>
+        </div>
+        {% for it in items %}
+          <div class="table__row">
+            <div>{{ loop.index }}</div>
+            <div><strong>{{ it.name }}</strong></div>
+            <div>{{ it.score }}/{{ it.total }}</div>
+            <div>{{ "%.1f"|format(it.percent) }}%</div>
+            <div class="sub small">
+  {{ it.created_at[:10].split('-')[2] }}/{{ it.created_at[:10].split('-')[1] }}/{{ it.created_at[:10].split('-')[0] }}
+</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
+{% endblock %}

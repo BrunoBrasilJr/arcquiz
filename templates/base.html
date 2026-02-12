@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="pt-br">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>{% block title %}{{ app_name }}{% endblock %}</title>
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+
+  <body>
+    <header class="header" id="top">
+      <div class="container header__inner">
+        <a class="brand" href="{{ url_for('index') }}">{{ app_name }}</a>
+
+        <nav class="nav">
+          <a class="nav__link" href="{{ url_for('index') }}">Início</a>
+          <a class="nav__link" href="{{ url_for('highscores') }}">Ranking</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="container main">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="toasts">
+            {% for category, message in messages %}
+              <div class="toast toast--{{ category }}">{{ message }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+      <div class="container footer__copyright">
+        © 2026 {{ app_name }}. Todos os direitos reservados.
+      </div>
+    </footer>
+
+    <script>
+      (function () {
+        function init() {
+          document.querySelectorAll("[data-options='quiz']").forEach(group => {
+            const options = group.querySelectorAll(".option");
+            const radios = group.querySelectorAll("input[type='radio']");
+
+            function refresh() {
+              options.forEach(o => o.classList.remove("is-selected"));
+              radios.forEach(r => {
+                if (r.checked) {
+                  const opt = r.closest(".option");
+                  if (opt) opt.classList.add("is-selected");
+                }
+              });
+            }
+
+            radios.forEach(r => r.addEventListener("change", refresh));
+            refresh();
+          });
+        }
+        document.addEventListener("DOMContentLoaded", init);
+      })();
+    </script>
+  </body>
+</html>
